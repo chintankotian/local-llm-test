@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravity Shift Runner</title>
+    <style>
+        body {
+            background: #0b0d14;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #wrap {
+            position: relative;
+            width: 960px;
+            height: 540px;
+        }
+
+        canvas#c {
+            width: 100%;
+            height: 100%;
+        }
+
+        #start,
+        #over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(11, 13, 20, .8);
+            color: #2ecc71;
+            text-align: center;
+            padding: 20px;
+            border-radius: 8px;
+            transition: background .3s, color .3s;
+        }
+
+        #start:hover,
+        #over button:hover {
+            background: #4fd1ff;
+            color: black;
+        }
+
+        #start button {
+            display: inline-block;
+            background: #4fd1ff;
+            color: black;
+            border: none;
+            padding: 8px 16px;
+            margin-top: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background .3s, color .3s;
+        }
+
+        #over button {
+            display: inline-block;
+            background: #4fd1ff;
+            color: black;
+            border: none;
+            padding: 8px 16px;
+            margin-top: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background .3s, color .3s;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="wrap">
+        <canvas id="c"></canvas>
+        <div id="start" class="hidden">
+            <h1>GRAVITY SHIFT RUNNER</h1>
+            <p>Space / Click = flip gravity</p>
+            <p>Press Space or click to start</p>
+            <button id="startBtn">Start</button>
+        </div>
+        <div id="over" class="hidden">
+            <h1>GAME OVER</h1>
+            <p>Final Score: <span id="finalScore"></span></p>
+            <p>Best Score: <span id="bestScore"></span></p>
+            <button id="restart">Restart</button>
+        </div>
+    </div>
+
+    <script>
+        // Constants
+        const { W, H, STRIP, FLOOR_Y, CEIL_Y, SIZE, PLAYER_SX, G, VMAX, SPEED0, SPEED_MAX, ACCEL, COOLDOWN, FLIP_T, SPIKE_W, SPIKE_H } = {
+            W: 960,
+            H: 540,
+            STRIP: 40,
+            FLOOR_Y: 500,
+            CEIL_Y: 40,
+            SIZE: 32,
+            PLAYER_SX: 200,
+            G: 2400,
+            VMAX: 1500,
+            SPEED0: 340,
+            SPEED_MAX: 520,
+            ACCEL: 4,
+            COOLDOWN: 0.30,
+            FLIP_T: 0.60,
+            SPIKE_W: 32,
+            SPIKE_H: 28
+        };
+
+        // State
+        let state = 'start';
+        let player = { x: 0, y: FLOOR_Y - SIZE, vy: 0, dir: 1, grounded: true, flipCd: 0 };
+        let speed = SPEED0;
+        let score = 0;
+        let best = localStorage.getItem('gsr_best') || 0;
+        let world = { pits: [], spikes: [], lastEnd: 900, lastSurface: null, nextX: 0 };
+        let trail = [];
+        let particles = [];
+        let shake = 0;
+
+        // Canvas setup
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+
+        function reset() {
+            player.x = 0;
+            player.y = FLOOR_Y - SIZE;
+            player.vy = 0;
+            player.dir = 1;
+            player.grounded = true;
+            player.flipCd = 0;
+            speed = SPEED0;
+            score = 0;
+
+            trail.length = 0;
+            particles.length = 0;
+            shake = 0;
+
+            world = { pits: [], spikes: [], lastEnd: 900, lastSurface: null, nextX: 0 };
+            generate();
+        }
+
+        function flip() {
+            if (player.flipCd <= 0) {
+                player.dir *= -1;
+                player.vy = 0;
+                player.grounded = false;
+                player.flipCd = COOLDOWN;
+            }
+        }
+
+        function generate() {
+            while (world.lastEnd < player.x + 2000) {
+                const surface = Math.random() > 0.5 ? 'floor' : 'ceil';
+                const type = Math.random() > 0.7 ? 'spike' : 'pit';
+                let width;
+
+                if (type === 'spike') {
+                    width = 32 * Math.floor(Math.random() * 3) + 32;
+                } else {
+                    width = Math.floor(Math.random() * 160) + 64;
+                }
+
+                let MIN_GAP = (SPEED0 + 60) * 0.9;
+                let gap = surface !== world.lastSurface ? MIN_GAP + Math.random() * 200 : 96 + Math.random() * 200;
+                let x0 = world.lastEnd + gap;
+                let x1 = x0 + width;
+
+                if (type === 'spike') {
+                    for (let i = x0; i < x1; i += SPIKE_W) {
+                        world.spikes.push({ surface, x: Math.round(i), y: surface === 'floor' ? FLOOR_Y : CEIL_Y, type });
+                    }
+                } else {
+                    world.pits.push({ surface, x0, x1, type });
+                }
+
+                world.lastEnd = x1;
+                world.lastSurface = surface;
+            }
+        }
+
+        function update(dt) {
+            speed = Math.min(SPEED_MAX, speed + ACCEL * dt);
+            player.x += speed * dt;
+            score = player.x / 10;
+
+            player.flipCd = Math.max(0, player.flipCd - dt);
+
+            // Physics
+            player.vy += G * player.dir * dt;
+            player.vy = Math.min(Math.max(-VMAX, player.vy), VMAX);
+            const prevY = player.y;
+            player.y += player.vy * dt;
+
+            // Landing and Death
+            if (player.dir === 1) {
+                if (player.y + SIZE >= FLOOR_Y && prevY + SIZE <= FLOOR_Y + 4) {
+                    if (!isInsidePit(world.pits, player.x, FLOOR_Y)) {
+                        player.y = FLOOR_Y - SIZE;
+                        player.vy = 0;
+                        player.grounded = true;
+
+                        // Landing particles
+                        for (let i = 0; i < 10; i++) {
+                            particles.push({
+                                x: player.x,
+                                y: FLOOR_Y,
+                                vx: (Math.random() - 0.5) * 120,
+                                vy: Math.random() * 60 + 260
+                            });
+                        }
+                    }
+                } else {
+                    player.grounded = false;
+                }
+            } else {
+                if (player.y <= CEIL_Y && prevY >= CEIL_Y - 4) {
+                    if (!isInsidePit(world.pits, player.x, CEIL_Y)) {
+                        player.y = CEIL_Y;
+                        player.vy = 0;
+                        player.grounded = true;
+
+                        // Landing particles
+                        for (let i = 0; i < 10; i++) {
+                            particles.push({
+                                x: player.x,
+                                y: CEIL_Y,
+                                vx: (Math.random() - 0.5) * 120,
+                                vy: -(Math.random() * 60 + 260)
+                            });
+                        }
+                    }
+                } else {
+                    player.grounded = false;
+                }
+            }
+
+            // Death
+            if (player.y > H + 60 || player.y < -60 - SIZE) {
+                die();
+            }
+
+            // Spike Collision
+            const camX = player.x - PLAYER_SX;
+            const spikeCheckY = player.dir === 1 ? FLOOR_Y : CEIL_Y;
+            for (let spike of world.spikes.filter(spike => spike.x >= camX && spike.x < camX + W)) {
+                const sx = Math.max(0, player.x - spike.x);
+                if (sx < SIZE) {
+                    die();
+                    break;
+                }
+            }
+
+            // Camera Update
+            const camX = player.x - PLAYER_SX;
+            cullWorld(camX);
+
+            // Trail
+            trail.push({ x: player.x, y: player.y });
+            if (trail.length > 14) {
+                trail.shift();
+            }
+
+            // Particles and Shake Update
+            updateParticles(dt);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, W, H);
+
+            // Parallax Background
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+            for (let i = Math.floor(-(camX * 0.3) % 80); i < W; i += 80) {
+                ctx.fillRect(i, H / 2 - STRIP / 2 + shake, 1, STRIP);
+            }
+
+            // Floor and Ceiling Strips
+            drawStrip('floor');
+            drawStrip('ceil');
+
+            // Spikes
+            drawSpikes();
+
+            // Trail
+            drawTrail();
+
+            // Player
+            ctx.fillStyle = '#4fd1ff';
+            if (state === 'playing') {
+                drawPlayer();
+            }
+
+            // Particles
+            drawParticles();
+
+            // HUD
+            ctx.fillStyle = '#2ecc71';
+            ctx.font = '16px Arial';
+            ctx.fillText(`Score: ${Math.floor(score)}`, 10, 20);
+            ctx.fillText(`Best: ${best}`, W - 50, 20);
+
+            // Flip Meter
+            ctx.fillStyle = '#222';
+            ctx.fillRect(W / 2 - 80, 40, 160, 10);
+            ctx.fillStyle = player.flipCd / COOLDOWN >= 1 ? '#4fd1ff' : 'rgba(79,209,255, 0.4)';
+            ctx.fillRect(W / 2 - 80 + (160 * (1 - player.flipCd / COOLDOWN)), 40, 160 * (player.flipCd / COOLDOWN), 10);
+        }
+
+        function drawStrip(surface) {
+            const y = surface === 'floor' ? FLOOR_Y : CEIL_Y;
+            ctx.fillStyle = '#1b2033';
+            ctx.fillRect(0, y - STRIP / 2 + shake, W, STRIP);
+
+            ctx.fillStyle = '#4fd1ff';
+            ctx.fillRect(0, (surface === 'floor' ? y - STRIP / 2 : y + STRIP / 2) + shake, SIZE + 4, STRIP);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, (surface === 'floor' ? y - STRIP / 2 : y + STRIP / 2) + shake, SIZE + 4, STRIP);
+        }
+
+        function drawSpikes() {
+            const camX = player.x - PLAYER_SX;
+            for (let spike of world.spikes) {
+                let x = spike.x - camX;
+                ctx.fillStyle = '#ff4d6d';
+                if (spike.surface === 'floor') {
+                    ctx.beginPath();
+                    ctx.moveTo(x - SPIKE_W / 2, FLOOR_Y);
+                    ctx.lineTo(x, FLOOR_Y - SPIKE_H);
+                    ctx.lineTo(x + SPIKE_W / 2, FLOOR_Y);
+                    ctx.closePath();
+                } else {
+                    ctx.beginPath();
+                    ctx.moveTo(x - SPIKE_W / 2, CEIL_Y);
+                    ctx.lineTo(x, CEIL_Y + SPIKE_H);
+                    ctx.lineTo(x + SPIKE_W / 2, CEIL_Y);
+                    ctx.closePath();
+                }
+                ctx.fill();
+            }
+        }
+
+        function drawTrail() {
+            for (let i = 0; i < trail.length; i++) {
+                const opacity = 0.35 * (i / trail.length);
+                ctx.fillStyle = `rgba(79, 209, 255, ${opacity})`;
+                ctx.fillRect(trail[i].x % W - PLAYER_SX + (shake * Math.random() - 0.5), trail[i].y, SIZE, SIZE);
+            }
+        }
+
+        function drawPlayer() {
+            ctx.fillStyle = '#4fd1ff';
+            ctx.fillRect(player.x % W - PLAYER_SX, player.y, SIZE, SIZE);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(player.x % W - PLAYER_SX, player.y, SIZE, SIZE);
+        }
+
+        function drawParticles() {
+            ctx.fillStyle = '#4fd1ff';
+            for (let particle of particles) {
+                if (particle.life > 0) {
+                    ctx.fillRect(particle.x % W - PLAYER_SX, particle.y, Math.random() * 2 + 2, Math.random() * 2 + 2);
+                }
+            }
+        }
+
+        function updateParticles(dt) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const particle = particles[i];
+                if (particle.life > 0) {
+                    particle.vx = (Math.random() - 0.5) * 2 + particle.vx;
+                    particle.vy += 600 * dt * particle.dir;
+                    particle.life -= dt;
+
+                    if (particle.life <= 0) {
+                        particles.splice(i, 1);
+                    }
+                }
+            }
+
+            if (shake > 0) {
+                shake *= 0.9;
+            }
+        }
+
+        function die() {
+            state = 'over';
+            shake = 14;
+
+            // Best score update
+            if (Math.floor(score) > best) {
+                localStorage.setItem('gsr_best', Math.floor(score));
+            }
+
+            document.getElementById('finalScore').textContent = Math.floor(score);
+            document.getElementById('bestScore').textContent = best;
+            document.getElementById('start').classList.add('hidden');
+            document.getElementById('over').classList.remove('hidden');
+        }
+
+        function cullWorld(camX) {
+            for (let key of ['pits', 'spikes']) {
+                world[key] = world[key].filter(item => item.x > camX - 100);
+            }
+        }
+
+        function mainLoop() {
+            const now = Date.now();
+            let dt = Math.min((now - last) / 1000, 1 / 30);
+            last = now;
+
+            if (state === 'playing') {
+                update(dt);
+                draw();
+            }
+
+            requestAnimationFrame(mainLoop);
+        }
+
+        let last = Date.now();
+        requestAnimationFrame(mainLoop);
+
+        // Input Handling
+        document.addEventListener('keydown', (e) => {
+            if (!e.repeat) {
+                switch (state) {
+                    case 'start':
+                        reset();
+                        state = 'playing';
+                        document.getElementById('start').classList.add('hidden');
+                        break;
+                    case 'playing':
+                        flip();
+                        break;
+                }
+            }
+        });
+
+        document.addEventListener('click', () => {
+            switch (state) {
+                case 'start':
+                    reset();
+                    state = 'playing';
+                    document.getElementById('start').classList.add('hidden');
+                    break;
+                case 'playing':
+                    flip();
+                    break;
+            }
+        });
+
+        document.getElementById('startBtn').addEventListener('click', () => {
+            reset();
+            state = 'playing';
+            document.getElementById('start').classList.add('hidden');
+        });
+
+        document.getElementById('restart').addEventListener('click', () => {
+            reset();
+            state = 'playing';
+            document.getElementById('over').classList.add('hidden');
+        });
+    </script>
+</body>
+
+</html>

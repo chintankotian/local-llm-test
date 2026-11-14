@@ -1,0 +1,233 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravity Shift Runner</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #333;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            background-color: #000;
+        }
+        .ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 24px;
+        }
+        .ui h1 {
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui" id="ui">
+        <h1>Gravity Shift Runner</h1>
+        <div id="score">Score: 0</div>
+        <div id="highScore">High Score: 0</div>
+        <div id="gravityCharge">Gravity Charge: 100%</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = innerWidth;
+        canvas.height = innerHeight;
+
+        const ui = document.getElementById('ui');
+        const scoreDisplay = document.getElementById('score');
+        const highScoreDisplay = document.getElementById('highScore');
+        const gravityChargeDisplay = document.getElementById('gravityCharge');
+
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('highScore')) || 0;
+
+        const player = {
+            x: 50,
+            y: canvas.height / 2,
+            width: 20,
+            height: 20,
+            speedX: 5,
+            speedY: 0,
+            gravity: 1.2,
+            jumpForce: -15,
+            isJumping: false,
+            gravityDirection: 1
+        };
+
+        const platforms = [];
+        const spikes = [];
+
+        function generateLevel() {
+            let lastX = 0;
+            while (lastX < canvas.width + player.speedX * 5) {
+                const platformHeight = Math.random() * 100 + 50;
+                const gapSize = (Math.random() - 0.5) * 100 + player.speedX * 5;
+
+                platforms.push({
+                    x: lastX,
+                    y: canvas.height - platformHeight,
+                    width: 10,
+                    height: platformHeight
+                });
+
+                spikes.push({
+                    x: lastX + 5,
+                    y: canvas.height - platformHeight,
+                    width: 10,
+                    height: 20
+                });
+
+                platforms.push({
+                    x: lastX + gapSize,
+                    y: 0,
+                    width: 10,
+                    height: canvas.height - platformHeight
+                });
+
+                spikes.push({
+                    x: lastX + gapSize,
+                    y: canvas.height - 20,
+                    width: 10,
+                    height: 20
+                });
+
+                lastX += gapSize + player.speedX * 5;
+            }
+        }
+
+        generateLevel();
+
+        function drawPlayer() {
+            ctx.fillStyle = '#0f0';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+        }
+
+        function drawPlatforms() {
+            ctx.fillStyle = '#fff';
+            platforms.forEach(platform => {
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            });
+        }
+
+        function drawSpikes() {
+            ctx.fillStyle = '#f00';
+            spikes.forEach(spike => {
+                ctx.fillRect(spike.x, spike.y, spike.width, spike.height);
+            });
+        }
+
+        function drawUI() {
+            scoreDisplay.textContent = `Score: ${score}`;
+            highScoreDisplay.textContent = `High Score: ${highScore}`;
+            gravityChargeDisplay.textContent = `Gravity Charge: 100%`;
+        }
+
+        function checkCollision() {
+            const playerRect = { x: player.x, y: player.y, width: player.width, height: player.height };
+            const gravityCharge = parseInt(localStorage.getItem('gravityCharge')) || 100;
+
+            for (let i = 0; i < platforms.length; i++) {
+                const platform = platforms[i];
+                if (playerRect.x + playerRect.width > platform.x &&
+                    playerRect.x < platform.x + platform.width &&
+                    playerRect.y + playerRect.height > platform.y &&
+                    playerRect.y < platform.y + platform.height) {
+                    if (player.isJumping && gravityCharge > 0) {
+                        player.y = platform.y - player.height;
+                        player.speedY = player.jumpForce;
+                        score += 10;
+                        localStorage.setItem('score', score);
+                        if (score > highScore) {
+                            highScore = score;
+                            localStorage.setItem('highScore', highScore);
+                        }
+                    } else if (player.y + player.height > platform.y) {
+                        player.speedY = 0;
+                    }
+                }
+            }
+
+            for (let i = 0; i < spikes.length; i++) {
+                const spike = spikes[i];
+                if (playerRect.x + playerRect.width > spike.x &&
+                    playerRect.x < spike.x + spike.width &&
+                    playerRect.y + playerRect.height > spike.y &&
+                    playerRect.y < spike.y + spike.height) {
+                    endGame();
+                }
+            }
+        }
+
+        function updatePlayer() {
+            player.x += player.speedX;
+            player.y += player.speedY;
+
+            if (player.y + player.height > canvas.height) {
+                player.y = canvas.height - player.height;
+            } else if (player.y < 0) {
+                player.y = 0;
+            }
+
+            player.speedY += player.gravity * player.gravityDirection;
+
+            if (player.y + player.height > canvas.height) {
+                player.y = canvas.height - player.height;
+                player.speedY = 0;
+            }
+        }
+
+        function update() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawPlatforms();
+            drawSpikes();
+            drawPlayer();
+            drawUI();
+
+            updatePlayer();
+            checkCollision();
+        }
+
+        function endGame() {
+            alert('Game Over! Your Score: ' + score);
+            score = 0;
+            localStorage.setItem('score', score);
+            platforms.length = 0;
+            spikes.length = 0;
+            generateLevel();
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.pointerType === 'mouse') {
+                if (!player.isJumping) {
+                    player.speedY = 0;
+                    player.y -= Math.min(player.jumpForce, -player.gravityDirection * player.speedY);
+                    player.isJumping = true;
+                }
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                player.gravityDirection *= -1;
+            }
+        });
+
+        setInterval(update, 10);
+    </script>
+</body>
+</html>

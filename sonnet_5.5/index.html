@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gravity Shift Runner</title>
+<style>
+  :root { --u: 1px; --cyan: #4de1ff; --pink: #ff6ec7; --bg: #05070d; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: #e8ecff;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: manipulation;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+  #stage {
+    position: relative; width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9;
+    background: #0b0e17; overflow: hidden; cursor: pointer;
+    box-shadow: 0 0 60px rgba(77, 225, 255, 0.08);
+  }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* HUD */
+  .hud { position: absolute; left: 0; right: 0; display: flex; align-items: center;
+    padding: 0 calc(26 * var(--u)); pointer-events: none; z-index: 2; }
+  .hud-top { top: 0; height: calc(60 * var(--u)); justify-content: space-between; }
+  .hud-bottom { bottom: 0; height: calc(60 * var(--u)); justify-content: center; gap: calc(14 * var(--u)); }
+  .stat { display: flex; align-items: baseline; gap: calc(10 * var(--u)); }
+  .label { font-size: calc(12 * var(--u)); letter-spacing: 0.22em; color: #7e8ab8; font-weight: 600; }
+  .val { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: calc(28 * var(--u));
+    font-weight: 700; font-variant-numeric: tabular-nums; color: #f2f5ff; }
+  .val.best { color: #ffd166; }
+  #meter { width: calc(300 * var(--u)); height: calc(14 * var(--u)); border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.14); overflow: hidden; }
+  #meterFill { height: 100%; width: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, #3a6bff, var(--cyan)); transition: filter .15s; }
+  #meter.charging #meterFill { background: linear-gradient(90deg, #6b4a8a, #b06ab0); filter: saturate(.7); }
+  #meter.ready { box-shadow: 0 0 calc(14 * var(--u)) rgba(77, 225, 255, 0.55); }
+
+  /* Overlays */
+  .screen { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+    background: rgba(5, 7, 13, 0.74); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); cursor: default; }
+  .card { text-align: center; padding: calc(34 * var(--u)) calc(52 * var(--u)); border-radius: calc(18 * var(--u));
+    background: rgba(16, 21, 38, 0.88); border: 1px solid rgba(124, 140, 255, 0.28);
+    box-shadow: 0 calc(10 * var(--u)) calc(50 * var(--u)) rgba(0, 0, 0, 0.55); max-width: 92%; }
+  h1 { margin: 0 0 calc(6 * var(--u)); font-size: calc(46 * var(--u)); letter-spacing: 0.06em; font-weight: 800;
+    background: linear-gradient(90deg, var(--cyan), var(--pink)); -webkit-background-clip: text; background-clip: text;
+    color: transparent; line-height: 1.1; }
+  h2 { margin: 0 0 calc(10 * var(--u)); font-size: calc(40 * var(--u)); letter-spacing: 0.1em; color: #ff5d7a; font-weight: 800; }
+  .sub { color: #98a3cf; font-size: calc(16 * var(--u)); margin: calc(6 * var(--u)) 0; line-height: 1.5; }
+  .sub b { color: #e8ecff; }
+  kbd { display: inline-block; padding: 0 calc(8 * var(--u)); border-radius: calc(5 * var(--u));
+    border: 1px solid #4a5588; background: #1a2140; font-family: inherit; color: #fff; }
+  .btn { margin-top: calc(22 * var(--u)); padding: calc(13 * var(--u)) calc(40 * var(--u)); font-size: calc(18 * var(--u));
+    font-weight: 700; letter-spacing: 0.1em; color: #05121a; border: 0; border-radius: 999px; cursor: pointer;
+    background: linear-gradient(90deg, var(--cyan), #8fa6ff); font-family: inherit;
+    box-shadow: 0 0 calc(24 * var(--u)) rgba(77, 225, 255, 0.35); transition: transform .12s, box-shadow .12s; }
+  .btn:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 0 calc(34 * var(--u)) rgba(77, 225, 255, 0.6); }
+  .btn:active { transform: scale(.98); }
+  .scoreline { display: flex; justify-content: center; gap: calc(40 * var(--u)); margin: calc(14 * var(--u)) 0 0; }
+  .scoreline div { display: flex; flex-direction: column; gap: calc(4 * var(--u)); }
+  .scoreline .val { font-size: calc(36 * var(--u)); }
+  #newBest { color: #ffd166; font-weight: 700; letter-spacing: 0.2em; font-size: calc(14 * var(--u)); margin-top: calc(8 * var(--u)); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="hud hud-top">
+      <div class="stat"><span class="label">SCORE</span><span id="score" class="val">0</span></div>
+      <div class="stat"><span class="label">BEST</span><span id="best" class="val best">0</span></div>
+    </div>
+    <div class="hud hud-bottom">
+      <span class="label">GRAVITY FLIP</span>
+      <div id="meter" class="ready"><div id="meterFill"></div></div>
+    </div>
+  </div>
+
+  <div id="startScreen" class="screen">
+    <div class="card">
+      <h1>GRAVITY SHIFT RUNNER</h1>
+      <p class="sub">Your cube runs on its own. You control gravity.</p>
+      <p class="sub">Press <kbd>SPACE</kbd> or <b>click / tap</b> to flip gravity<br>
+        between the floor and the ceiling.</p>
+      <p class="sub">Dodge <b>spikes</b>, <b>pits</b> and <b>walls</b>. Flips recharge briefly.</p>
+      <div class="scoreline"><div><span class="label">BEST</span><span id="startBest" class="val best">0</span></div></div>
+      <button id="startBtn" class="btn">START</button>
+    </div>
+  </div>
+
+  <div id="overScreen" class="screen hidden">
+    <div class="card">
+      <h2>CRASHED</h2>
+      <div class="scoreline">
+        <div><span class="label">SCORE</span><span id="overScore" class="val">0</span></div>
+        <div><span class="label">BEST</span><span id="overBest" class="val best">0</span></div>
+      </div>
+      <div id="newBest" class="hidden">★ NEW HIGH SCORE ★</div>
+      <button id="restartBtn" class="btn">RESTART</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Constants ----------
+  const W = 960, H = 540;
+  const CEIL_Y = 60, FLOOR_Y = 480;       // inner surfaces of the corridor
+  const S = 28;                            // player size
+  const PX_SCREEN = 230;                   // player's fixed screen x
+  const GRAV = 2200, MAXV = 1500;          // gravity pull (px/s^2), terminal velocity
+  const CD = 0.3;                          // flip cooldown (seconds)
+  const BUFFER = 0.14;                     // input buffer window
+  const SPIKE_W = 30, SPIKE_H = 26, BLOCK_H = 44;
+  const STEP = 1 / 120;
+  const COL_DOWN = '#4de1ff', COL_UP = '#ff6ec7';
+
+  // ---------- DOM ----------
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+  const elScore = document.getElementById('score');
+  const elBest = document.getElementById('best');
+  const meter = document.getElementById('meter');
+  const meterFill = document.getElementById('meterFill');
+  const startScreen = document.getElementById('startScreen');
+  const overScreen = document.getElementById('overScreen');
+  const startBtn = document.getElementById('startBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const startBest = document.getElementById('startBest');
+  const overScore = document.getElementById('overScore');
+  const overBest = document.getElementById('overBest');
+  const newBestTag = document.getElementById('newBest');
+
+  // ---------- Helpers ----------
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const speedAt = x => Math.min(600, 340 + x * 0.0125);
+
+  function loadBest() {
+    try { return parseInt(localStorage.getItem('gsr_best') || '0', 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem('gsr_best', String(v)); } catch (e) { /* ignore */ }
+  }
+
+  // ---------- State ----------
+  let state = 'menu';                 // 'menu' | 'playing' | 'dead'
+  let px, y, vy, dir, grounded, rot, rotTarget, cooldown, buffered, squash;
+  let obstacles, particles, trail, genX, lastSide;
+  let shake = 0, deadTimer = 0, trailT = 0, demoT = 0, score = 0, best = loadBest();
+  let overShown = false, newBest = false;
+  let cam = 0;
+
+  const stars = Array.from({ length: 90 }, () => ({
+    x: Math.random() * W, y: Math.random() * H,
+    z: 0.05 + Math.random() * 0.35, r: Math.random() * 1.4 + 0.4, a: Math.random() * 0.6 + 0.2
+  }));
+
+  function reset() {
+    px = 0; y = FLOOR_Y - S; vy = 0; dir = 1; grounded = true;
+    rot = 0; rotTarget = 0; cooldown = 0; buffered = 0; squash = 0;
+    obstacles = []; particles = []; trail = [];
+    genX = 1000; lastSide = Math.random() < 0.5 ? 0 : 1;
+    shake = 0; deadTimer = 0; trailT = 0; demoT = 0; score = 0;
+    overShown = false; newBest = false;
+    cam = px - PX_SCREEN;
+  }
+
+  // ---------- Level generation ----------
+  // Obstacle: {type:'spike'|'gap'|'block', side:0 floor | 1 ceiling, a, b}
+  // Safety guarantee: while an obstacle covers [a,b] on side S, the player only needs to be
+  // on the opposite surface. When consecutive obstacles are on different sides the player must
+  // switch sides in between; the spacing (sep) leaves a flip window of >= ~0.3s even after
+  // accounting for the full-corridor flight time (~0.6s), the player width and the cooldown.
+  function generate() {
+    while (genX < px + W * 2.2) {
+      const v = speedAt(genX);
+      const first = obstacles.length === 0;
+      const side = first ? (Math.random() < 0.5 ? 0 : 1) : (Math.random() < 0.62 ? 1 - lastSide : lastSide);
+      const r = Math.random();
+      const type = r < 0.5 ? 'spike' : (r < 0.78 ? 'block' : 'gap');
+      let width;
+      if (type === 'spike') width = Math.floor(rand(3, 9)) * SPIKE_W;
+      else if (type === 'block') width = rand(90, 220);
+      else width = rand(120, 300);
+
+      const ease = Math.max(0, 1 - genX / 14000);
+      let sep;
+      if (first) sep = 150;
+      else if (side !== lastSide) sep = 96 + 0.5 * v + 40 + Math.random() * 140 + 200 * ease;
+      else sep = 110 + 0.25 * v + Math.random() * 180 + 100 * ease;
+
+      const a = genX + sep, b = a + width;
+      obstacles.push({ type, side, a, b });
+      genX = b; lastSide = side;
+    }
+    while (obstacles.length && obstacles[0].b < px - 400) obstacles.shift();
+  }
+
+  // Is there solid base surface under/over the player's x-span?
+  function surfaceSolid(side) {
+    let covered = 0;
+    const x0 = px, x1 = px + S;
+    for (const o of obstacles) {
+      if (o.type !== 'gap' || o.side !== side) continue;
+      const ov = Math.min(x1, o.b) - Math.max(x0, o.a);
+      if (ov > 0) covered += ov;
+    }
+    return (S - covered) >= 8;
+  }
+
+  // ---------- Effects ----------
+  function spawn(x, yy, n, make) {
+    for (let i = 0; i < n && particles.length < 500; i++) particles.push(make());
+  }
+  const curColor = () => (dir === 1 ? COL_DOWN : COL_UP);
+
+  function landBurst(impact) {
+    const sy = dir === 1 ? y + S : y;
+    const n = Math.floor(6 + Math.min(14, impact / 90));
+    const col = curColor();
+    spawn(0, 0, n, () => ({
+      x: px + S / 2 + rand(-10, 10), y: sy,
+      vx: rand(-240, 140), vy: -dir * rand(80, 360), g: 900 * dir,
+      life: rand(0.25, 0.55), max: 0.55, size: rand(2, 5), col
+    }));
+    squash = Math.min(0.3, impact / 4200);
+    shake = Math.max(shake, Math.min(5, impact / 300));
+  }
+
+  function flipBurst() {
+    const col = curColor();
+    spawn(0, 0, 10, () => ({
+      x: px + S / 2, y: y + S / 2,
+      vx: rand(-200, 100), vy: rand(-160, 160), g: 0,
+      life: rand(0.2, 0.4), max: 0.4, size: rand(2, 4), col
+    }));
+  }
+
+  function deathBurst() {
+    const col = curColor();
+    spawn(0, 0, 46, () => {
+      const a = Math.random() * Math.PI * 2, s = rand(100, 560);
+      return { x: px + S / 2, y: y + S / 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s, g: 0,
+        life: rand(0.5, 1.1), max: 1.1, size: rand(3, 7), col: Math.random() < 0.7 ? col : '#ffffff' };
+    });
+  }
+
+  // ---------- Game actions ----------
+  function doFlip() {
+    dir = -dir; vy = 0; grounded = false;
+    cooldown = CD; rotTarget += Math.PI / 2;
+    flipBurst();
+  }
+
+  function pressFlip() {
+    if (state !== 'playing') return;
+    if (cooldown <= 0) doFlip(); else buffered = BUFFER;
+  }
+
+  function die() {
+    if (state !== 'playing') return;
+    state = 'dead';
+    shake = 24; deadTimer = 0;
+    deathBurst();
+    if (score > best) { best = score; saveBest(best); newBest = true; }
+  }
+
+  function startGame() {
+    reset();
+    state = 'playing';
+    startScreen.classList.add('hidden');
+    overScreen.classList.add('hidden');
+    hud.classList.remove('hidden');
+    elScore.textContent = '0';
+    elBest.textContent = String(best);
+  }
+
+  // ---------- Simulation ----------
+  function stepSim(dt) {
+    const demo = state === 'menu';
+    const v = demo ? 300 : speedAt(px);
+    px += v * dt;
+
+    if (demo) {
+      demoT += dt;
+      if (demoT > 1.3 && cooldown <= 0) { demoT = 0; doFlip(); }
+    } else {
+      generate();
+      score = Math.floor(px / 10);
+    }
+
+    if (cooldown > 0) cooldown = Math.max(0, cooldown - dt);
+    if (buffered > 0) {
+      buffered -= dt;
+      if (cooldown <= 0) { doFlip(); buffered = 0; }
+    }
+
+    vy += GRAV * dir * dt;
+    vy = clamp(vy, -MAXV, MAXV);
+    const prevY = y;
+    y += vy * dt;
+
+    let landed = false, impact = 0;
+
+    // Base floor / ceiling
+    if (dir === 1) {
+      if (y + S >= FLOOR_Y && surfaceSolid(0)) {
+        if (prevY + S <= FLOOR_Y + 3) { y = FLOOR_Y - S; impact = vy; vy = 0; landed = true; }
+        else if (!demo) die();
+      }
+    } else {
+      if (y <= CEIL_Y && surfaceSolid(1)) {
+        if (prevY >= CEIL_Y - 3) { y = CEIL_Y; impact = -vy; vy = 0; landed = true; }
+        else if (!demo) die();
+      }
+    }
+
+    // Obstacles
+    if (!demo) {
+      for (const o of obstacles) {
+        if (o.b < px - 10) continue;
+        if (o.a > px + S + 10) break;
+        if (o.type === 'block') {
+          const top = o.side === 0 ? FLOOR_Y - BLOCK_H : CEIL_Y;
+          const bot = o.side === 0 ? FLOOR_Y : CEIL_Y + BLOCK_H;
+          if (px + S > o.a && px < o.b) {
+            if (o.side === 0 && dir === 1 && vy >= 0 && prevY + S <= top + 0.5 && y + S >= top) {
+              y = top - S; impact = vy; vy = 0; landed = true;
+            } else if (o.side === 1 && dir === -1 && vy <= 0 && prevY >= bot - 0.5 && y <= bot) {
+              y = bot; impact = -vy; vy = 0; landed = true;
+            } else if (y + S - 1 > top && y + 1 < bot && px + S - 2 > o.a && px + 2 < o.b) {
+              die();
+            }
+          }
+        } else if (o.type === 'spike') {
+          if (px + S > o.a && px < o.b) {
+            const k0 = Math.max(0, Math.floor((px + 3 - o.a) / SPIKE_W));
+            const k1 = Math.floor((px + S - 3 - o.a) / SPIKE_W);
+            const hh = Math.max(0, o.side === 0 ? FLOOR_Y - (y + S) : y - CEIL_Y);
+            if (hh < SPIKE_H) {
+              for (let k = k0; k <= k1; k++) {
+                const cx = o.a + k * SPIKE_W + SPIKE_W / 2;
+                const hw = (SPIKE_W / 2) * (1 - hh / SPIKE_H) * 0.8;
+                if (px + S - 3 > cx - hw && px + 3 < cx + hw) { die(); break; }
+              }
+            }
+          }
+        }
+        if (state === 'dead') return;
+      }
+      // Fell out of the world (into a pit)
+      if (y > H + 20 || y + S < -20) die();
+      if (state === 'dead') return;
+    }
+
+    if (landed) {
+      if (!grounded && impact > 180) landBurst(impact);
+      grounded = true;
+    } else grounded = false;
+
+    // Motion trail
+    trailT += dt;
+    if (trailT >= 0.014) {
+      trailT = 0;
+      trail.push({ x: px, y, rot, age: 0, dir });
+    }
+  }
+
+  function updateFx(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    for (let i = trail.length - 1; i >= 0; i--) {
+      trail[i].age += dt;
+      if (trail[i].age > 0.35) trail.splice(i, 1);
+    }
+    shake *= Math.exp(-9 * dt);
+    if (shake < 0.1) shake = 0;
+    rot += (rotTarget - rot) * Math.min(1, dt * 18);
+    squash *= Math.exp(-12 * dt);
+    if (state === 'dead') {
+      deadTimer += dt;
+      if (deadTimer > 0.7 && !overShown) {
+        overShown = true;
+        overScore.textContent = String(score);
+        overBest.textContent = String(best);
+        newBestTag.classList.toggle('hidden', !newBest);
+        overScreen.classList.remove('hidden');
+      }
+    }
+  }
+
+  // ---------- Rendering ----------
+  function drawSurface(side) {
+    const start = cam - 60, end = cam + W + 60;
+    const target = (dir === 1 && side === 0) || (dir === -1 && side === 1);
+    const edgeCol = target ? curColor() : '#3a4575';
+    let cursor = start;
+    const seg = (x0, x1) => {
+      if (x1 <= x0) return;
+      const sx = x0 - cam, w = x1 - x0;
+      ctx.fillStyle = '#111729';
+      if (side === 0) ctx.fillRect(sx, FLOOR_Y, w, H - FLOOR_Y + 40);
+      else ctx.fillRect(sx, -40, w, CEIL_Y + 40);
+      // subtle tick marks
+      ctx.fillStyle = 'rgba(120,140,255,0.08)';
+      for (let t = Math.ceil(x0 / 60) * 60; t < x1; t += 60) {
+        if (side === 0) ctx.fillRect(t - cam, FLOOR_Y + 8, 2, H - FLOOR_Y);
+        else ctx.fillRect(t - cam, 0, 2, CEIL_Y - 8);
+      }
+      ctx.save();
+      ctx.shadowColor = edgeCol; ctx.shadowBlur = target ? 14 : 0;
+      ctx.fillStyle = edgeCol;
+      if (side === 0) ctx.fillRect(sx, FLOOR_Y, w, 3);
+      else ctx.fillRect(sx, CEIL_Y - 3, w, 3);
+      ctx.restore();
+    };
+    for (const o of obstacles) {
+      if (o.type !== 'gap' || o.side !== side) continue;
+      if (o.b < start || o.a > end) continue;
+      seg(cursor, Math.min(o.a, end));
+      cursor = Math.max(cursor, o.b);
+    }
+    seg(cursor, end);
+  }
+
+  function render() {
+    const sx = canvas.width / W, sy = canvas.height / H;
+    ctx.setTransform(sx, 0, 0, sy, 0, 0);
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() * 2 - 1) * shake, (Math.random() * 2 - 1) * shake);
+
+    // Background
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0a0d1a'); g.addColorStop(1, '#141a35');
+    ctx.fillStyle = g;
+    ctx.fillRect(-40, -40, W + 80, H + 80);
+
+    ctx.fillStyle = 'rgba(110,130,255,0.05)';
+    const gs = 80, go = (cam * 0.5) % gs;
+    for (let x = -go; x < W + gs; x += gs) ctx.fillRect(x, 0, 1, H);
+    for (let yy = CEIL_Y; yy < FLOOR_Y; yy += 70) ctx.fillRect(0, yy, W, 1);
+
+    for (const s of stars) {
+      const x = ((s.x - cam * s.z) % W + W) % W;
+      ctx.globalAlpha = s.a;
+      ctx.fillStyle = '#cfd8ff';
+      ctx.fillRect(x, s.y, s.r, s.r);
+    }
+    ctx.globalAlpha = 1;
+
+    // Obstacle bodies (blocks, spikes) beneath surfaces so edges stay crisp
+    for (const o of obstacles) {
+      if (o.b < cam - 60 || o.a > cam + W + 60) continue;
+      const x0 = o.a - cam, w = o.b - o.a;
+      if (o.type === 'block') {
+        const top = o.side === 0 ? FLOOR_Y - BLOCK_H : CEIL_Y;
+        ctx.fillStyle = '#242d52';
+        ctx.fillRect(x0, top, w, BLOCK_H);
+        ctx.strokeStyle = '#7f8fff'; ctx.lineWidth = 2;
+        ctx.strokeRect(x0 + 1, top + 1, w - 2, BLOCK_H - 2);
+        ctx.fillStyle = 'rgba(160,175,255,0.9)';
+        if (o.side === 0) ctx.fillRect(x0, top, w, 3); else ctx.fillRect(x0, top + BLOCK_H - 3, w, 3);
+      } else if (o.type === 'spike') {
+        ctx.save();
+        ctx.fillStyle = '#ff4d6d'; ctx.shadowColor = '#ff4d6d'; ctx.shadowBlur = 10;
+        ctx.beginPath();
+        const n = Math.round(w / SPIKE_W);
+        for (let k = 0; k < n; k++) {
+          const bx = x0 + k * SPIKE_W;
+          if (o.side === 0) { ctx.moveTo(bx, FLOOR_Y); ctx.lineTo(bx + SPIKE_W / 2, FLOOR_Y - SPIKE_H); ctx.lineTo(bx + SPIKE_W, FLOOR_Y); }
+          else { ctx.moveTo(bx, CEIL_Y); ctx.lineTo(bx + SPIKE_W / 2, CEIL_Y + SPIKE_H); ctx.lineTo(bx + SPIKE_W, CEIL_Y); }
+        }
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    drawSurface(0);
+    drawSurface(1);
+
+    // Trail
+    for (const t of trail) {
+      const k = 1 - t.age / 0.35;
+      const size = S * (0.35 + 0.65 * k);
+      ctx.globalAlpha = 0.4 * k * k;
+      ctx.fillStyle = t.dir === 1 ? COL_DOWN : COL_UP;
+      ctx.save();
+      ctx.translate(t.x - cam + S / 2, t.y + S / 2);
+      ctx.rotate(t.rot);
+      ctx.fillRect(-size / 2, -size / 2, size, size);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+
+    // Particles
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      ctx.fillStyle = p.col;
+      ctx.fillRect(p.x - cam - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // Player
+    if (state !== 'dead') {
+      const col = curColor();
+      ctx.save();
+      ctx.translate(px - cam + S / 2, y + S / 2);
+      ctx.scale(1 + squash, 1 - squash);
+      ctx.rotate(rot);
+      ctx.shadowColor = col; ctx.shadowBlur = 20;
+      ctx.fillStyle = col;
+      ctx.fillRect(-S / 2, -S / 2, S, S);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(5,10,25,0.55)';
+      ctx.fillRect(-S / 2 + 6, -S / 2 + 6, S - 12, S - 12);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(S / 2 - 12, -5, 5, 5);
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  function updateHud() {
+    const shown = String(score);
+    if (elScore.textContent !== shown) elScore.textContent = shown;
+    const b = String(Math.max(best, score));
+    if (elBest.textContent !== b) elBest.textContent = b;
+    const charge = clamp(1 - cooldown / CD, 0, 1);
+    meterFill.style.width = (charge * 100).toFixed(1) + '%';
+    meter.classList.toggle('ready', charge >= 1);
+    meter.classList.toggle('charging', charge < 1);
+  }
+
+  // ---------- Main loop ----------
+  let last = 0, acc = 0;
+  function frame(ts) {
+    const dt = Math.min(0.05, (ts - last) / 1000 || 0);
+    last = ts;
+    acc += dt;
+    while (acc >= STEP) {
+      if (state === 'playing' || state === 'menu') stepSim(STEP);
+      acc -= STEP;
+    }
+    updateFx(dt);
+    cam = px - PX_SCREEN;
+    render();
+    if (state !== 'menu') updateHud();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Input ----------
+  const blurActive = () => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); };
+
+  document.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      if (e.repeat) return;
+      if (state === 'menu') startGame();
+      else if (state === 'playing') pressFlip();
+      else if (state === 'dead' && overShown && deadTimer > 0.9) startGame();
+      blurActive();
+    } else if (e.code === 'Enter' || e.key === 'Enter') {
+      if (state === 'menu') { e.preventDefault(); startGame(); blurActive(); }
+      else if (state === 'dead' && overShown) { e.preventDefault(); startGame(); blurActive(); }
+    }
+  });
+
+  stage.addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    if (state === 'playing') { e.preventDefault(); pressFlip(); }
+  });
+
+  startBtn.addEventListener('click', () => { startGame(); startBtn.blur(); });
+  restartBtn.addEventListener('click', () => { startGame(); restartBtn.blur(); });
+
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.max(1, Math.round(r.width * dpr));
+    canvas.height = Math.max(1, Math.round(r.height * dpr));
+    stage.style.setProperty('--u', (r.width / W) + 'px');
+  }
+  window.addEventListener('resize', resize);
+
+  // ---------- Boot ----------
+  reset();
+  startBest.textContent = String(best);
+  elBest.textContent = String(best);
+  resize();
+  requestAnimationFrame(t => { last = t; frame(t); });
+})();
+</script>
+</body>
+</html>
